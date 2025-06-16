@@ -12,45 +12,8 @@ from typing import TypedDict, List, Union
 from langchain.callbacks.base import BaseCallbackHandler
 # from langgraph.visualization import visualize
 
-MODEL_ID = 'meta.llama3-70b-instruct-v1:0'
-
-class SimpleLogger(BaseCallbackHandler):
-    def on_llm_start(self, serialized, prompts, **kwargs):
-        print("\n📥 Prompt sent:", prompts)
-
-    def on_llm_end(self, response, **kwargs):
-        generations = response.generations if hasattr(response, "generations") else response
-        print("📤 Response received:", generations[0][0].text if generations else response)
-
-# ---------------- TOOLS ----------------
-@tool
-def get_capital(country: str) -> str:
-    """Return the capital of a given country. Supported: France, Germany."""
-    capitals = {"France": "Paris", "Germany": "Berlin"}
-    return capitals.get(country, "Unknown")
-
-@tool
-def get_population(country: str) -> str:
-    """Return the population of a given country as a string. Supported: France, Germany."""
-    pops = {"France": 68000000, "Germany": 83000000}
-    return str(pops.get(country, 0))
-
-@tool
-def calculate_difference(values: str) -> str:
-    """Calculate absolute difference between two integers passed as comma-separated values (e.g. '10,20')."""
-    a, b = map(int, values.split(","))
-    return str(abs(a - b))
-
-TOOLS = [get_capital, get_population, calculate_difference]
-TOOL_MAP = {t.name: t for t in TOOLS}
-
-# ---------------- PLANNER ----------------
-planner_llm = ChatBedrock(
-    model_id=MODEL_ID,
-    region_name="us-east-1",
-    temperature=0,
-    callbacks=[SimpleLogger()],
-)
+from components.common import llm
+from components.tools import TOOL_MAP
 
 def planner_agent(state):
     """Planner agent: Breaks down a high-level query into structured subtasks with designated executor types."""
@@ -68,7 +31,7 @@ Respond ONLY with valid JSON:
   {{"executor": "math", "task": "Calculate revenue change from Q1 to Q2."}}
 ]
 """
-    response = planner_llm.invoke(prompt).content
+    response = llm.invoke(prompt).content
     match = re.search(r"\[.*\]", response, re.DOTALL)
     if match:
         subtasks = json.loads(match.group(0))
@@ -76,27 +39,6 @@ Respond ONLY with valid JSON:
         raise ValueError("❌ No valid JSON list found in planner response")
     return {"tasks": subtasks, "current_step": 0, "results": [], "query": query}
 
-# ---------------- EXECUTORS ----------------
-llm = ChatBedrock(
-    model_id=MODEL_ID,
-    region_name="us-east-1",
-    temperature=0,
-    callbacks=[SimpleLogger()],
-)
-
-# REACT_PROMPT = """
-# You are a chain-of-thought executor with tools.
-# Task: {task}
-# Available tools: get_capital, get_population, calculate_difference
-# Use this format:
-# Thought: ...
-# Action: ...
-# Action Input: ...
-# Observation: ...
-# Final Answer: ...
-
-# Do not generate the Observation, let tools generate it for you.
-# """
 REACT_PROMPT = """
 You are a chain-of-thought reasoning agent equipped with external tools to help solve user questions.
 
@@ -183,54 +125,4 @@ def math_executor(state):
     response = llm.invoke(MATH_PROMPT.format(task=task)).content.strip()
     return {**state, "current_step": state["current_step"] + 1, "results": state["results"] + [response]}
 
-# ---------------- ROUTER ----------------
-def route_dummy(state):
-    return None
 
-def route(state):
-    """Routing function: Determines which executor should handle the current task."""
-    executor_type = state["tasks"][state["current_step"]]["executor"]
-    return executor_type
-
-# ---------------- GRAPH ----------------
-class AgentState(TypedDict):
-    query: str
-    tasks: List[dict]
-    current_step: int
-    results: List[Union[str, dict]]
-
-graph = StateGraph(AgentState)
-
-graph.add_node("plan", planner_agent)
-graph.add_node("researcher", researcher_executor)
-graph.add_node("cot", cot_executor)
-graph.add_node("math", math_executor)
-graph.add_node("toolnode", ToolNode(TOOLS))
-graph.add_node("router", route_dummy)
-
-graph.set_entry_point("plan")
-graph.add_edge("plan", "router")
-
-graph.add_conditional_edges("router", route, {
-    "researcher": "researcher",
-    "cot": "cot",
-    "math": "math"
-})
-
-def is_done(state):
-    """Check if all tasks are completed."""
-    return state["current_step"] >= len(state["tasks"])
-
-graph.add_conditional_edges("researcher", is_done, {True: END, False: "router"})
-graph.add_conditional_edges("cot", is_done, {True: END, False: "router"})
-graph.add_conditional_edges("math", is_done, {True: END, False: "router"})
-
-app = graph.compile()
-# visualize(graph).render("agent_workflow", format="png", view=True)
-
-# ---------------- RUN ----------------
-query = "Find Tesla's last quarter performance, get capital of France, and calculate revenue change from 10B to 12B."
-result = app.invoke({"query": query})
-print("\nMulti-Agent Routed Execution:")
-for r in result["results"]:
-    print(" -", r)

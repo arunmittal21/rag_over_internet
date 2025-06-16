@@ -15,6 +15,10 @@ langchain-community = "^0.3.25"
 boto3 = "^1.38.36"
 langchain-aws = "^0.2.25"
 graphviz = "^0.21"
+duckduckgo-search = "^8.0.4"
+newspaper3k = "^0.2.8"
+nltk = "^3.9.1"
+lxml-html-clean = "^0.4.2"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]
