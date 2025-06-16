@@ -1,0 +1,21 @@
+[tool.poetry]
+name = "rag_over_internet"
+version = "0.1.0"
+description = ""
+authors = ["arun <arunmittal21@gmail.com>"]
+readme = "README.md"
+packages = []  # or just use package-mode = false
+package-mode = false
+
+[tool.poetry.dependencies]
+python = ">=3.12,<4.0"
+langchain = ">=0.3.25,<0.4.0"
+langgraph = {extras = ["visualization"], version = "^0.4.8"}
+langchain-community = "^0.3.25"
+boto3 = "^1.38.36"
+langchain-aws = "^0.2.25"
+graphviz = "^0.21"
+
+[build-system]
+requires = ["poetry-core>=2.0.0,<3.0.0"]
+build-backend = "poetry.core.masonry.api"
