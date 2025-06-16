@@ -1,4 +1,4 @@
-venv
-venv_roi
+.venv
 **/.ipynb_checkpoints
 **/__pycache__
+bin

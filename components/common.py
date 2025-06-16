@@ -3,6 +3,7 @@
 from langchain_aws import ChatBedrock
 from typing import TypedDict, List, Union
 from langchain.callbacks.base import BaseCallbackHandler
+import boto3
 
 MODEL_ID = 'meta.llama3-70b-instruct-v1:0'
 
@@ -21,10 +22,17 @@ class AgentState(TypedDict):
     current_step: int
     results: List[Union[str, dict]]
 
+session = boto3.Session(
+    profile_name='adfs'
+)
+# credentials = session.get_credentials()
+# print(credentials)
+
+bedrock_runtime_client = session.client("bedrock-runtime")
 
 llm = ChatBedrock(
-    model_id=MODEL_ID,
-    region_name="us-east-1",
+    client=bedrock_runtime_client,
+    model=MODEL_ID,
     temperature=0,
     callbacks=[SimpleLogger()],
 )

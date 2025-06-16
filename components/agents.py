@@ -2,14 +2,6 @@
 
 import json
 import re
-from langgraph.graph import StateGraph, END
-from langchain_aws import ChatBedrock
-from langchain_core.prompts import ChatPromptTemplate
-from langchain.tools import tool
-from langgraph.prebuilt import ToolNode
-from langchain_core.runnables import RunnableLambda
-from typing import TypedDict, List, Union
-from langchain.callbacks.base import BaseCallbackHandler
 # from langgraph.visualization import visualize
 
 from components.common import llm
@@ -32,7 +24,8 @@ Respond ONLY with valid JSON:
 ]
 """
     response = llm.invoke(prompt).content
-    match = re.search(r"\[.*\]", response, re.DOTALL)
+    response_str = str(response)
+    match = re.search(r"\[.*\]", response_str, re.DOTALL)
     if match:
         subtasks = json.loads(match.group(0))
     else:
@@ -85,7 +78,11 @@ def cot_executor(state):
     scratchpad = ""
     for i in range(5):
         prompt = REACT_PROMPT.format(task=task) + scratchpad
-        output = llm.invoke(prompt).content.strip()
+        content = llm.invoke(prompt).content
+        if isinstance(content, list):
+            output = str(content[0]).strip() if content else ""
+        else:
+            output = str(content).strip()
         print(f'output from cot is {i}: {output}, scratchpad is {scratchpad}')
         if "Final Answer:" in output:
             answer = output.split("Final Answer:")[1].strip()
@@ -111,7 +108,11 @@ Respond with a summary of your findings.
 def researcher_executor(state):
     """Researcher agent: Answers questions based on synthesis or known information."""
     task = state["tasks"][state["current_step"]]["task"]
-    response = llm.invoke(RESEARCH_PROMPT.format(task=task)).content.strip()
+    content = llm.invoke(RESEARCH_PROMPT.format(task=task)).content
+    if isinstance(content, list):
+        response = str(content[0]).strip() if content else ""
+    else:
+        response = str(content).strip()
     return {**state, "current_step": state["current_step"] + 1, "results": state["results"] + [response]}
 
 MATH_PROMPT = """
@@ -122,7 +123,11 @@ Task: {task}
 def math_executor(state):
     """Math agent: Directly solves numerical or arithmetic tasks."""
     task = state["tasks"][state["current_step"]]["task"]
-    response = llm.invoke(MATH_PROMPT.format(task=task)).content.strip()
+    content = llm.invoke(MATH_PROMPT.format(task=task)).content
+    if isinstance(content, list):
+        response = str(content[0]).strip() if content else ""
+    else:
+        response = str(content).strip()
     return {**state, "current_step": state["current_step"] + 1, "results": state["results"] + [response]}
 
 
