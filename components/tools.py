@@ -1,151 +1,121 @@
-# Multi-Agent ReAct System with Planner and Routed Executors using ToolNode
-
 import __main__
 import asyncio
 import inspect
+import aiohttp
 from langchain.tools import tool
 from typing import Dict, List, Literal
-# from langgraph.visualization import visualize
 from langchain_core.tools import BaseTool
 from duckduckgo_search import DDGS
-from duckduckgo_search.exceptions import RatelimitException, DuckDuckGoSearchException
-import requests
+from duckduckgo_search.exceptions import DuckDuckGoSearchException
 from bs4 import BeautifulSoup
-from newspaper import Article
 import json
 import fitz  # PyMuPDF
-import time
+import os
+import ssl
+
+
 
 @tool
 def get_capital(country: str) -> str:
-    """Return the capital of a given country. Supported: France, Germany."""
+    """Get the capital of a country."""
     capitals = {"France": "Paris", "Germany": "Berlin"}
     return capitals.get(country, "Unknown")
 
 @tool
 def get_population(country: str) -> str:
-    """Return the population of a given country as a string. Supported: France, Germany."""
+    """Get the population of a country."""
     pops = {"France": 68000000, "Germany": 83000000}
     return str(pops.get(country, 0))
 
 @tool
 def calculate_difference(values: str) -> str:
-    """Calculate absolute difference between two integers passed as comma-separated values (e.g. '10,20')."""
+    """Calculate the absolute difference between two numbers provided as a comma-separated string."""
     a, b = map(int, values.split(","))
     return str(abs(a - b))
 
-
-
 @tool
-def search_and_scrape_web(input: str,max_results: int=10) -> str:
-    """Search the web for a given query and return the top 3 URLs with page content summary."""
+def search_and_scrape_web(input: str, max_results: int = 10) -> list[dict]:
+    """Search the web and scrape text content from the resulting URLs."""
     return asyncio.run(_search_and_scrape_web(input, max_results=max_results, type="text"))
 
 @tool
-def search_and_scrape_news(input: str, max_results: int=10) -> str:
-    """Search the web for a given query and return the top 3 URLs with page content summary."""
+def search_and_scrape_news(input: str, max_results: int = 10) -> list[dict]:
+    """Search the news and scrape content from the resulting URLs."""   
     return asyncio.run(_search_and_scrape_web(input, max_results=max_results, type="news"))
 
-async def _search_and_scrape_web(input: str, max_results: int, type: Literal["text", "news"]) -> str:
-    """
-    Search the web for a given query and return the top 3 URLs with page content summary.
-    Input should be the search query.
-    """
+
+ssl_context = ssl.create_default_context()
+ssl_context.check_hostname = False
+ssl_context.verify_mode = ssl.CERT_NONE
+
+async def _search_and_scrape_web(input: str, max_results: int, type: Literal["text", "news"]) -> list[dict]:
     query = input.strip()
     results = []
-    task=[]
-    with DDGS() as ddgs:
-        max_retries = 5
-        for current_attempt in range(max_retries + 1):
-            try:
-                for r in ddgs.text(query, max_results=max_results) if type == "text" else ddgs.news(query, max_results=max_results):
-                    url = r.get("href") or r.get("url")
-                    if not url:
-                        continue
-                    try:
-                        task.append(asyncio.create_task(download_and_parse_article(url)))
-                        # article = Article(url)
-                        # article.download()
-                        # article.parse()
-                        # text = article.text.strip()
-                        # results.append({"url": url, "content": text[:1500] if text else "No content found."})
-                    except Exception as e:
-                        results.append({"url": url, "content": f"Error: {str(e)}"})
-                await asyncio.gather(*task)
-                for res in task:
-                    if res.result():
-                        results.append(res.result())
-                break
-            except DuckDuckGoSearchException as e:
-                if current_attempt < max_retries:
-                    current_attempt += 1
-                    # Exponential backoff
-                    backoff_time = 2 ** current_attempt
-                    print(f"{str(e)}. Retrying in {backoff_time} seconds...")
-                    await asyncio.sleep(backoff_time)
-                else:
-                    raise e
+    tasks = []
 
-    return json.dumps(results, indent=2)
+    async with aiohttp.ClientSession() as session:
+        with DDGS() as ddgs:
+            max_retries = 5
+            for current_attempt in range(max_retries + 1):
+                try:
+                    search_results = ddgs.text(query, max_results=max_results) if type == "text" else ddgs.news(query, max_results=max_results)
+                    for r in search_results:
+                        url = r.get("href") or r.get("url")
+                        if not url:
+                            continue
+                        tasks.append(download_and_parse_article(session, url))
+                    completed = await asyncio.gather(*tasks, return_exceptions=True)
+                    for res in completed:
+                        if isinstance(res, Exception):
+                            results.append({"url": "", "content": "", "error": str(res)})
+                        elif res:
+                            results.append(res)
+                    break
+                except DuckDuckGoSearchException as e:
+                    if current_attempt < max_retries:
+                        backoff_time = 2 ** current_attempt
+                        print(f"{str(e)}. Retrying in {backoff_time} seconds...")
+                        await asyncio.sleep(backoff_time)
+                    else:
+                        raise e
 
+    return results
 
-# async def download_and_parse_article(url: str) -> dict | None:
-#     def sync_scrape():
-#         article = Article(url)
-#         article.download()
-#         article.parse()
-#         text = article.text.strip()
-#         return {"url": url, "content": text} if text else None
+async def fetch(session: aiohttp.ClientSession, url: str) -> bytes | str:
+    try:
+        async with session.get(url, timeout=aiohttp.ClientTimeout(total=30, sock_connect=5), ssl=ssl_context) as response:
+            response.raise_for_status()
+            return await response.content.read() if url.lower().endswith(".pdf") else await response.text()
+    except Exception as e:
+        raise e
 
-#     try:
-#         return await asyncio.to_thread(sync_scrape)
-#     except Exception as e:
-#         return {"url": url, "content": f"Error: {str(e)}"}
+async def download_and_parse_article(session: aiohttp.ClientSession, url: str) -> dict:
+    try:
+        response = await fetch(session, url)
+        if isinstance(response, bytes):
+            content = await asyncio.to_thread(parse_pdf, response)
+        else:
+            content = await asyncio.to_thread(parse_html, response)
+        return {"url": url, "content": content}
+    except Exception as e:
+        return {"url": url, "content": "", "error": str(e)}
 
-async def download_and_parse_article(url: str) -> dict | None:
-    def sync_scrape():
-        try:
-            if url.lower().endswith(".pdf"):
-                return parse_pdf(url)
-            else:
-                return parse_html(url)
-        except Exception as e:
-            return {"url": url, "content": f"Error: {str(e)}"}
-
-    return await asyncio.to_thread(sync_scrape)
-
-
-def parse_html(url: str) -> dict:
-    response = requests.get(url, timeout=10)
-    response.raise_for_status()
-
-    soup = BeautifulSoup(response.text, 'html.parser')
-
-    # Remove unwanted tags
+def parse_html(html: str) -> str:
+    soup = BeautifulSoup(html, 'html.parser')
     for tag in soup(["script", "style", "header", "footer", "nav", "aside"]):
         tag.decompose()
-
-    # Get visible text
     text = soup.get_text(separator="\n", strip=True)
-    text = "\n".join(line for line in text.splitlines() if line.strip())
+    return "\n".join(line for line in text.splitlines() if line.strip())
 
-    return {"url": url, "content": text[:10000]} if text else {"url": url, "content": "No content found."}
-
-
-def parse_pdf(url: str) -> dict:
-    response = requests.get(url, timeout=10)
-    response.raise_for_status()
-
-    with open("tmp/temp.pdf", "wb") as f:
-        f.write(response.content)
-
-    doc = fitz.open("tmp/temp.pdf")
+def parse_pdf(response: bytes) -> str:
+    os.makedirs("tmp", exist_ok=True)
+    temp_path = "tmp/temp.pdf"
+    with open(temp_path, "wb") as f:
+        f.write(response)
+    doc = fitz.open(temp_path)
     text = "\n".join(page.get_text() for page in doc)
     doc.close()
-
-    return {"url": url, "content": text[:10000]} if text else {"url": url, "content": "No content found in PDF."}
-
-
+    return text
 
 def find_tools_in_current_script():
     tools = []
@@ -159,12 +129,10 @@ TOOL_MAP = {t.name: t for t in TOOLS}
 
 def get_tool_manifest_json(tools: List[BaseTool] = TOOLS) -> List[Dict]:
     tool_info = []
-
     for tool in tools:
         args = []
         args_schema = getattr(tool, "args_schema", None)
-
-        if args_schema and hasattr(args_schema, "model_fields"): 
+        if args_schema and hasattr(args_schema, "model_fields"):
             for field_name, field in args_schema.model_fields.items():
                 field_info = {
                     "name": field_name,
@@ -173,19 +141,13 @@ def get_tool_manifest_json(tools: List[BaseTool] = TOOLS) -> List[Dict]:
                 if field.description:
                     field_info["description"] = field.description
                 args.append(field_info)
-
         tool_info.append({
             "name": tool.name,
             "description": getattr(tool, "description", "No description"),
             "args": args
         })
-
     return tool_info
 
 if __name__ == "__main__":
     import json
-    # print(json.dumps(get_tool_manifest_json(TOOLS), indent=2))
     print(search_and_scrape_web("Tesla last quarter performance"))
-
-
-

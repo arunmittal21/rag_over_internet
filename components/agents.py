@@ -4,7 +4,7 @@ import json
 import re
 # from langgraph.visualization import visualize
 
-from components.common import llm
+from utils.common import llm, rerank_segments, chunk_documents
 from components.tools import TOOL_MAP ,get_tool_manifest_json, search_and_scrape_web, search_and_scrape_news
 
 
@@ -93,12 +93,16 @@ def researcher_executor(state):
 
     if tool is None:
         raise ValueError(f"Tool not found for task: {task}")
-    tool_args = {"input": task_input, "max_results": 10}
+    
+    tool_args = {"input": task_input, "max_results": 20}
     tool_output = tool.invoke(tool_args)
+    chunked_docs = chunk_documents([doc['content'] for doc in tool_output], chunk_size=1000, overlap=50)
+    reranked_docs = rerank_segments(chunked_docs, query=task_input)
+    tool_output_reranked = "\n".join(reranked_docs)
     # print(f"🧪 {task} tool output:\n", tool_output)
     research_prompt = f"""
 You are a summarizer. Here is the raw content from the search results:
-{tool_output[:7800]}
+{tool_output_reranked[:7800]}
 
 Provide a clear and concise summary of your findings in less than 1000 tokens. The topic is:- {task_input}.
 """

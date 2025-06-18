@@ -4,7 +4,7 @@ from langgraph.graph import StateGraph, END
 # from langgraph.visualization import visualize
 
 from components.agents import planner_agent,researcher_executor,cot_executor,math_executor
-from components.common import AgentState
+from utils.common import AgentState
 # ---------------- ROUTER ----------------
 
 

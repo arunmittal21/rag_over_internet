@@ -1,9 +1,11 @@
-# Multi-Agent ReAct System with Planner and Routed Executors using ToolNode
+from utils.logutil import setup_logger
+setup_logger()
+
 
 from langgraph.graph import StateGraph, END
 
 from components.agents import planner_agent,researcher_executor,prepare_answer
-from components.common import AgentState
+from utils.common import AgentState
 # ---------------- ROUTER ----------------
 
 
@@ -85,8 +87,8 @@ with open("graph.png", "wb") as f:
 
 # ---------------- RUN ----------------
 # query = "Find Tesla's last quarter performance, get capital of France, and calculate revenue change from 10B to 12B."
-# query = "Find Google's last year performance, how is company doing and what are there immediate plan to get more market share."
-query = "What is apple inc up to? What are new features of the new products its going to launch?"
+query = "Find Google's 2024 year performance, how is company doing and what are there immediate plan to get more market share."
+# query = "What is apple inc up to? What are new features of the new products its going to launch?"
 result = app.invoke({"query": query})
 
 
