@@ -96,7 +96,7 @@ def researcher_executor(state):
     
     tool_args = {"input": task_input, "max_results": 20}
     tool_output = tool.invoke(tool_args)
-    chunked_docs = chunk_documents([doc['content'] for doc in tool_output], chunk_size=1000, overlap=50)
+    chunked_docs = chunk_documents([doc['content'] for doc in tool_output], chunk_size=500, overlap=50)
     reranked_docs = rerank_segments(chunked_docs, query=task_input)
     tool_output_reranked = "\n".join(reranked_docs)
     # print(f"🧪 {task} tool output:\n", tool_output)
@@ -104,7 +104,7 @@ def researcher_executor(state):
 You are a summarizer. Here is the raw content from the search results:
 {tool_output_reranked[:7800]}
 
-Provide a clear and concise summary of your findings in less than 1000 tokens. The topic is:- {task_input}.
+Provide a clear and concise summary of your findings in less than 1500 tokens. The topic is:- {task_input}.
 """
     summary = llm.invoke(research_prompt).content
     print(f"🧪 {task} tool summary:\n", summary)
