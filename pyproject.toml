@@ -19,6 +19,8 @@ duckduckgo-search = "^8.0.4"
 newspaper3k = "^0.2.8"
 nltk = "^3.9.1"
 lxml-html-clean = "^0.4.2"
+grandalf = "^0.8"
+pymupdf = "^1.26.1"
 
 [build-system]
 requires = ["poetry-core>=2.0.0,<3.0.0"]

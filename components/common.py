@@ -9,18 +9,27 @@ MODEL_ID = 'meta.llama3-70b-instruct-v1:0'
 
 class SimpleLogger(BaseCallbackHandler):
     def on_llm_start(self, serialized, prompts, **kwargs):
-        print("\n📥 Prompt sent:", prompts)
+        pass
+        # print("\n📥 Prompt sent:", prompts)
 
     def on_llm_end(self, response, **kwargs):
         generations = response.generations if hasattr(response, "generations") else response
-        print("📤 Response received:", generations[0][0].text if generations else response)
+        # print("📤 Response received:", generations[0][0].text if generations else response)
 
-
+        # state =  {
+        #     **state,
+        #     "next_task": executor_name,
+        #     "task_input": executor_input,
+        #     "scratchpad": scratchpad,
+        #     "current_step": state["current_step"] + 1
+        # }
 class AgentState(TypedDict):
     query: str
-    tasks: List[dict]
+    scratchpad: str
+    next_task: str
+    task_input: str
+    result: str
     current_step: int
-    results: List[Union[str, dict]]
 
 session = boto3.Session(
     profile_name='adfs'

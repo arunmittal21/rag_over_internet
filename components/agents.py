@@ -5,129 +5,136 @@ import re
 # from langgraph.visualization import visualize
 
 from components.common import llm
-from components.tools import TOOL_MAP
+from components.tools import TOOL_MAP ,get_tool_manifest_json, search_and_scrape_web, search_and_scrape_news
 
-def planner_agent(state):
-    """Planner agent: Breaks down a high-level query into structured subtasks with designated executor types."""
-    query = state["query"]
-    prompt = f"""
-<|begin_of_text|><|start_header_id|>system<|end_header_id|>
-Respond ONLY with a JSON array of subtasks. No explanation or formatting
-<|eot_id|><|start_header_id|>user<|end_header_id|>    
-You are a planner. Break down the query into high-level subtasks with executor type.
-Query: {query}
-Respond ONLY with valid JSON:
+
+high_level_tools = """
 [
-  {{"executor": "researcher", "task": "Find Tesla's recent performance."}},
-  {{"executor": "cot", "task": "Get capital of France."}},
-  {{"executor": "math", "task": "Calculate revenue change from Q1 to Q2."}}
+  {
+    "name": "internet_researcher",
+    "description": "Given input will be searched on the internet, Content from first few links will be summarized and returned",
+    "input": "Google search friendly query. Try to be specific and focus on one topic at a time"
+  },
+  {
+    "name": "news_researcher",
+    "description": "Given input will be searched in news articles, Content from first few links will be summarized and returned",
+    "input": "Google search friendly query. Try to be specific and focus on one topic at a time"
+  },
+  {
+    "name": "prepare_answer",
+    "description": "Useful for preparing the final answer from collected information",
+    "input": "No input required — the agent will use the full scratchpad to prepare the answer"
+  }
 ]
 """
-    response = llm.invoke(prompt).content
-    response_str = str(response)
-    match = re.search(r"\[.*\]", response_str, re.DOTALL)
-    if match:
-        subtasks = json.loads(match.group(0))
-    else:
-        raise ValueError("❌ No valid JSON list found in planner response")
-    return {"tasks": subtasks, "current_step": 0, "results": [], "query": query}
 
-REACT_PROMPT = """
-You are a chain-of-thought reasoning agent equipped with external tools to help solve user questions.
+def planner_agent(state):
+    """Planner agent: Breaks down a high-level query into subtasks routed to specific tools."""
+    query = state["query"]
+    scratchpad = state.get("scratchpad", "")
 
-Your task is: {task}
+    prompt = f"""
+<|begin_of_text|><|start_header_id|>system<|end_header_id|>
+You are a planner agent equipped with high-level tools to solve user questions.
+Based on the query and scratchpad, decide the next task and pick one tool to execute it. Try to be specific in your input to the tool to get the best results.
+Do not keep repeating the same tool with same inputs if it has already been used in the scratchpad, as it will not give you different result.
 
-You can use the following tools:
+You can use these tools:
+{high_level_tools}
 
-1. get_capital(country: str) -> str  
-   - Description: Returns the capital of a given country.  
-   - Supported countries: France, Germany  
-   - Example Input: "France"
+Use this exact format for your reasoning:
+Task: Describe your thinking or what you need to do.
+Action: The tool name to use (exact match from the above list).
+Action Input: The input string for that tool. Be as specific as possible as this will be the only input passed to the tool.
+Action Output: (Leave this blank — it will be filled after the tool is called.)
 
-2. get_population(country: str) -> str  
-   - Description: Returns the population of a given country as a string.  
-   - Supported countries: France, Germany  
-   - Example Input: "Germany"
-
-3. calculate_difference(values: str) -> str  
-   - Description: Calculates the absolute difference between two integers.  
-   - Input should be a comma-separated string of two numbers.  
-   - Example Input: "68000000,83000000"
-
-Use the following format for your reasoning:
-
-Thought: Describe your thinking or what you need to find out.
-Action: The tool you want to use (must be exactly one of the tools above).
-Action Input: The input to the tool (must follow the input format shown above).
-Observation: (Leave this blank. It will be filled in after the tool is executed.)
-... (Continue as needed)
-Final Answer: Provide the final answer after all reasoning is complete.
-
-Instructions:
-- Think step-by-step and break down the task logically.
-- **Do NOT fabricate the Observation — End your response when you need observation.**
+Guidelines:
+- Think step-by-step.
 - Use one tool per step.
-- Only use supported countries and input formats.
-- Stop when you have enough information to confidently give the Final Answer.
+- Call `prepare_answer` only when enough information has been gathered.
+<|eot_id|><|start_header_id|>user<|end_header_id|>
+Query: {query}
+
+Current scratchpad:
+{scratchpad}
 """
 
+    response = llm.invoke(prompt).content.strip()
+    scratchpad += "\n" + response + "\n"
+    print("✅ Planner reasoning:\n", response)
+    # Match Action and Action Input
+    match = re.search(r"Action:\s*(\w+)\s*Action Input:\s*\"?(.+?)\"?(?:\s|$)", response, re.DOTALL)
+    if match:
+        executor_name = match.group(1).strip()
+        executor_input = match.group(2).strip()
+        # print(f"✅ Planner selected: {executor_name} with input: {executor_input}")
+        return {
+            **state,
+            "next_task": executor_name,
+            "task_input": executor_input,
+            "scratchpad": scratchpad,
+            "current_step": state.get("current_step", 0) + 1
+        }
+    else:
+        raise ValueError("❌ No valid 'Action' and 'Action Input' found in planner output.")
 
-def cot_executor(state):
-    """Chain-of-thought (CoT) executor: Uses tools and reasoning steps to solve tasks step-by-step."""
-    task = state["tasks"][state["current_step"]]["task"]
-    scratchpad = ""
-    for i in range(5):
-        prompt = REACT_PROMPT.format(task=task) + scratchpad
-        content = llm.invoke(prompt).content
-        if isinstance(content, list):
-            output = str(content[0]).strip() if content else ""
-        else:
-            output = str(content).strip()
-        print(f'output from cot is {i}: {output}, scratchpad is {scratchpad}')
-        if "Final Answer:" in output:
-            answer = output.split("Final Answer:")[1].strip()
-            return {**state, "current_step": state["current_step"] + 1, "results": state["results"] + [answer]}
-        m = re.search(r'Action: (\w+)\s*Action Input: \"(.+)\"', output)
-        if m:
-            tool_name, tool_input = m.group(1).strip(), m.group(2).strip()
-            print(f'calling tool {tool_name} with input {tool_input}')
-            tool = TOOL_MAP.get(tool_name)
-            if tool:
-                result = tool.invoke(tool_input)
-                scratchpad += f"{output}\nObservation: {result}\n"
-            else:
-                scratchpad += f"{output}\nObservation: Tool '{tool_name}' not found\n"
-    return state
-
-RESEARCH_PROMPT = """
-You are a researcher. You should look up or synthesize knowledge from known facts.
-Task: {task}
-Respond with a summary of your findings.
-"""
 
 def researcher_executor(state):
-    """Researcher agent: Answers questions based on synthesis or known information."""
-    task = state["tasks"][state["current_step"]]["task"]
-    content = llm.invoke(RESEARCH_PROMPT.format(task=task)).content
-    if isinstance(content, list):
-        response = str(content[0]).strip() if content else ""
+    """Executor for 'internet_researcher' or 'news_researcher' tools."""
+    task_input: str = state.get("task_input", "")
+    task = state.get("next_task", "")
+    tool = None
+    if task == 'internet_researcher':
+        tool = search_and_scrape_web
+    elif task == 'news_researcher':
+        tool = search_and_scrape_news
     else:
-        response = str(content).strip()
-    return {**state, "current_step": state["current_step"] + 1, "results": state["results"] + [response]}
+        raise ValueError(f"Unknown researcher tool requested: {task}")
 
-MATH_PROMPT = """
-You are a math-focused executor. Solve the task directly.
-Task: {task}
+    if tool is None:
+        raise ValueError(f"Tool not found for task: {task}")
+    tool_args = {"input": task_input, "max_results": 10}
+    tool_output = tool.invoke(tool_args)
+    # print(f"🧪 {task} tool output:\n", tool_output)
+    research_prompt = f"""
+You are a summarizer. Here is the raw content from the search results:
+{tool_output[:7800]}
+
+Provide a clear and concise summary of your findings in less than 1000 tokens. The topic is:- {task_input}.
 """
+    summary = llm.invoke(research_prompt).content
+    print(f"🧪 {task} tool summary:\n", summary)
+    return {
+        **state,
+        "next_task": "plan",  # Go back to planner after research
+        "task_input": "",
+        "scratchpad": state["scratchpad"] + f"{summary}\n",
+        "current_step": state["current_step"] + 1,
+    }
 
-def math_executor(state):
-    """Math agent: Directly solves numerical or arithmetic tasks."""
-    task = state["tasks"][state["current_step"]]["task"]
-    content = llm.invoke(MATH_PROMPT.format(task=task)).content
-    if isinstance(content, list):
-        response = str(content[0]).strip() if content else ""
-    else:
-        response = str(content).strip()
-    return {**state, "current_step": state["current_step"] + 1, "results": state["results"] + [response]}
+
+def prepare_answer(state):
+    """Final step: Prepares answer based on full scratchpad and query."""
+    query = state["query"]
+    scratchpad = state["scratchpad"]
+
+    final_prompt = f"""
+You are a helpful assistant. Use the research notes below to provide a complete and final answer to the original query.
+Do not make up any information. If the information is insufficient, state that clearly.
+
+Query: {query}
+
+Scratchpad:
+{scratchpad}
+
+Final Answer:
+"""
+    final_response = llm.invoke(final_prompt).content
+    return {
+        **state,
+        "result": final_response,
+        "scratchpad": scratchpad + f"\nFinal Answer: {final_response}",
+        "current_step": state["current_step"] + 1
+    }
 
 
